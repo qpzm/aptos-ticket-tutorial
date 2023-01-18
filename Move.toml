@@ -1,0 +1,12 @@
+[package]
+name = "ticket-tutorial"
+version = "0.0.0"
+
+[dependencies.AptosFramework]
+git = 'https://github.com/aptos-labs/aptos-core.git'
+rev = 'main'
+subdir = 'aptos-move/framework/aptos-framework'
+
+[addresses]
+std =  "0x1"
+TicketTutorial = "0xf6a1ae7af79a1e1f46090e2fa5adb9728cb904240905b5ff3311fba04d66c0f5"
