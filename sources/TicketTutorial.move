@@ -3,19 +3,27 @@ module TicketTutorial::tickets {
     use std::vector;
     // use aptos_framework::managed_coin;
     use aptos_framework::coin;
+    use std::string;
+    use aptos_framework::table_with_length;
+
     #[test_only]
     use aptos_std::type_info;
     #[test_only]
     use std::debug;
 
     struct ConcertTicket has key, store, drop {
-        seat: vector<u8>,
-        ticket_code: vector<u8>,
+        identifier: SeatIdentifier,
+        ticket_code: string::String,
         price: u64,
     }
 
+    struct SeatIdentifier has store, copy, drop {
+        row: string::String,
+        seat_number: u64
+    }
+
     struct Venue has key {
-        available_tickets: vector<ConcertTicket>,
+        available_tickets: table_with_length::TableWithLength<SeatIdentifier, ConcertTicket>,
         max_seats: u64
     }
 
@@ -33,11 +41,11 @@ module TicketTutorial::tickets {
     const EINVALID_BALANCE: u64 = 7;
 
     public entry fun init_venue(venue_owner: &signer, max_seats: u64) {
-        let available_tickets = vector::empty<ConcertTicket>();
+        let available_tickets = table_with_length::new<SeatIdentifier, ConcertTicket>();
         move_to<Venue>(venue_owner, Venue { available_tickets, max_seats })
     }
 
-    public entry fun create_ticket(venue_owner: &signer, seat: vector<u8>, ticket_code: vector<u8>, price: u64) acquires Venue {
+    public entry fun create_ticket(venue_owner: &signer, row: vector<u8>, seat_number: u64, ticket_code: vector<u8>, price: u64) acquires Venue {
         // Check if the venue exists
         let venue_owner_addr = signer::address_of(venue_owner);
         assert!(exists<Venue>(venue_owner_addr), ENO_VENUE);
@@ -46,15 +54,25 @@ module TicketTutorial::tickets {
         let venue = borrow_global_mut<Venue>(venue_owner_addr);
         assert!(current_seat_count < venue.max_seats, EMAX_SEATS);
 
-        //move_to<ConcertTicket>(venue_owner, ConcertTicket {seat, ticket_code})
-        vector::push_back(&mut venue.available_tickets, ConcertTicket {seat, ticket_code, price});
+        // impl1: Use move_to
+        // move_to<ConcertTicket>(venue_owner, ConcertTicket {seat, ticket_code})
+
+        // impl2: Use vector
+        // vector::push_back(&mut venue.available_tickets, ConcertTicket {seat, ticket_code, price});
+
+        // impl3: Use table
+        let identifier = SeatIdentifier { row: string::utf8(row), seat_number };
+        let ticket = ConcertTicket { identifier, ticket_code: string::utf8(ticket_code), price};
+        table_with_length::add(&mut venue.available_tickets, identifier, ticket)
     }
 
+    // Table does not support length
     public fun available_ticket_count(venue_owner_addr: address): u64 acquires Venue {
         let venue = borrow_global<Venue>(venue_owner_addr);
-        vector::length<ConcertTicket>(&venue.available_tickets)
+        table_with_length::length<SeatIdentifier, ConcertTicket>(&venue.available_tickets)
     }
 
+    /*
     fun get_ticket_info(venue_owner_addr: address, seat: vector<u8>): (bool, vector<u8>, u64, u64) acquires Venue {
         assert!(exists<Venue>(venue_owner_addr), ENO_VENUE);
         let venue = borrow_global<Venue>(venue_owner_addr);
@@ -74,15 +92,17 @@ module TicketTutorial::tickets {
         assert!(success, EINVALID_TICKET);
         return (success, price)
     }
+    */
 
-    public entry fun purchase_ticket<CoinType>(buyer: &signer, venue_owner_addr: address, seat: vector<u8>) acquires Venue, TicketEnvelope {
+    public entry fun purchase_ticket<CoinType>(buyer: &signer, venue_owner_addr: address, row: vector<u8>, seat_number: u64) acquires Venue, TicketEnvelope {
         let buyer_addr = signer::address_of(buyer);
-        let (success, _, price, index) = get_ticket_info(venue_owner_addr, seat);
-        assert!(success, EINVALID_TICKET);
-
+        let target_seat_id = SeatIdentifier { row: string::utf8(row), seat_number };
         let venue = borrow_global_mut<Venue>(venue_owner_addr);
-        coin::transfer<CoinType>(buyer, venue_owner_addr, price);
-        let ticket = vector::remove<ConcertTicket>(&mut venue.available_tickets, index);
+        assert!(table_with_length::contains<SeatIdentifier, ConcertTicket>(&venue.available_tickets, target_seat_id), EINVALID_TICKET);
+
+        let target_ticket = table_with_length::borrow<SeatIdentifier, ConcertTicket>(&venue.available_tickets, target_seat_id);
+        coin::transfer<CoinType>(buyer, venue_owner_addr, target_ticket.price);
+        let ticket = table_with_length::remove<SeatIdentifier, ConcertTicket>(&mut venue.available_tickets, target_seat_id);
 
         // Create an envelope for the account if it is the first purchase for him/her.
         if (!exists<TicketEnvelope>(buyer_addr)) {
@@ -92,8 +112,6 @@ module TicketTutorial::tickets {
         let envelope = borrow_global_mut<TicketEnvelope>(buyer_addr);
         vector::push_back<ConcertTicket>(&mut envelope.tickets, ticket);
     }
-
-    //fun purchase_ticket() {}
 
     #[test_only]
     struct MockMoney { }
@@ -111,7 +129,7 @@ module TicketTutorial::tickets {
         aptos_framework::account::create_account_for_test(buyer_addr);
 
         init_venue(&venue_owner, 10);
-        create_ticket(&venue_owner, b"A24", b"AB43C7F", 0);
+        create_ticket(&venue_owner, b"A", 24, b"AB43C7F", 0);
 
         // let type_info = type_info::type_of<MockMoney>();
         // let address: address = type_info::account_address(&type_info);
@@ -130,7 +148,7 @@ module TicketTutorial::tickets {
 
         aptos_framework::managed_coin::register<MockMoney>(&venue_owner);
 
-        purchase_ticket<MockMoney>(&buyer, venue_owner_addr, b"A24");
+        purchase_ticket<MockMoney>(&buyer, venue_owner_addr, b"A", 24);
 
         assert!(coin::balance<MockMoney>(buyer_addr) == 65, EINVALID_BALANCE);
         assert!(coin::balance<MockMoney>(venue_owner_addr) == 35, EINVALID_BALANCE);
